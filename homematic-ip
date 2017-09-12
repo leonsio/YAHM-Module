@@ -308,6 +308,8 @@ fi
 if [ -c /dev/eq3loop ]
 then
     lxc-device -n ${LXCNAME} add /dev/eq3loop
+    rm -rf /dev/ttyS0
+    rm -rf ${LXC_ROOT_FS}/dev/ttyS0 
     # get device ID
     loopdev=\$(ls -al /dev/eq3loop | grep -o '24[0-9]')
     mknod -m 666 ${LXC_ROOT_FS}/dev/ttyS0 c \$loopdev 1
