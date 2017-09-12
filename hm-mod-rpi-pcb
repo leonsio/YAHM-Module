@@ -107,8 +107,8 @@ _module_install()
 # Provides:       hm-mod-rpi-pcb yahm
 # Required-Start: udev mountkernfs \$remote_fs
 # Required-Stop:
-# Default-Start: S
-# Default-Stop:
+# Default-Start: 2 3 4 5
+# Default-Stop: 0 1 6
 # Short-Description: Enables GPIO 18 as reset Interface for HM RF Module for Raspberry
 # Description:
 ### END INIT INFO
@@ -143,10 +143,12 @@ EOF
         chmod +x $file_hm_mod_rpi_pcb
 	if [ "$CODENAME" = "stretch" ] ;
 	then
-	    systemctl daemon-reload
-	    systemctl enable hm-mod-rpi-pcb
+        update-rc.d hm-mod-rpi-pcb remove
+        update-rc.d hm-mod-rpi-pcb defaults
+        update-rc.d hm-mod-rpi-pcb enable
+        systemctl daemon-reload
 	else
-            insserv $file_hm_mod_rpi_pcb
+        insserv $file_hm_mod_rpi_pcb
 	fi
         info "Installing reset gpio as service is done."
     fi 
@@ -198,10 +200,6 @@ EOF
     fi
     
     
-    # IP ausgeben
-#    IP=$(lxc-info -n ${LXCNAME} |grep -E -o "([0-9]{1,3}[\.]){3}[0-9]{1,3}")
-#    echo 'Homematic CCU2 IP:' $IP
-
     # Reboot
     if [ $reboot -gt 0 ]
     then
@@ -214,8 +212,6 @@ EOF
         progress "Trying to start service"
         systemctl enable hm-mod-rpi-pcb
         systemctl start hm-mod-rpi-pcb
-#        progress "Rebooting CCU2"
-#        lxc-attach -n ${LXCNAME} "reboot" 
     fi  
 }
 
@@ -289,12 +285,12 @@ _module_remove()
     
     info "Uninstall gpio reset service..."
     if [ -e $file_hm_mod_rpi_pcb ];then
-	if [ "$CODENAME" = "stretch" ] ;
-	then
-            systemctl disable hm-mod-rpi-pcb	
-	else
+	    if [ "$CODENAME" = "stretch" ] ;
+	    then
+            update-rc.d hm-mod-rpi-pcb remove
+	    else
             insserv -r $file_hm_mod_rpi_pcb
-	fi
+	    fi
         rm $file_hm_mod_rpi_pcb
         progress "Remove $file_hm_mod_rpi_pcb."
     fi
