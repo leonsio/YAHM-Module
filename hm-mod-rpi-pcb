@@ -5,7 +5,7 @@
 # HM-MOD-RPI-PBC Modul for Raspberry Pi2 / Raspberry Pi3
 #
 
-description="GPIO Funkmodul für Raspberry Pi2/3"
+description="GPIO Funkmodul für Raspberry Pi2/3 (deprecated)"
 module_version="1.0"
 
 # Default Parameter

@@ -3,8 +3,8 @@
 # Homematic IP
 #
 
-description="Homematic IP Unterstützung"
-module_version="0.3"
+description="Homematic IP Unterstützung (deprecated)"
+module_version="0.4"
 
 set +e
 
@@ -18,6 +18,11 @@ _module_install()
     if [ ! -e ${LXC_ROOT_MODULES}/hm-mod-rpi-pcb ] && [ $IS_FORCE -ne 1 ]
     then
         die "ERROR: hm-mod-rpi-pcb module must be installed first"
+    fi
+
+    if [ -e ${LXC_ROOT_MODULES}/pivccu ] && [ $IS_FORCE -ne 1 ]
+    then
+        die "ERROR: please uninstall pivccu module first"
     fi
 
     [ "x$(id -un)" == "xroot" ] || die "Sorry, this script must be run as root. Try sudo ...."
@@ -216,6 +221,16 @@ _module_install()
         fi
         cp eq3_char_loop.ko /lib/modules/$(uname -r)/kernel/drivers/char/
 
+        progress "Building plat_eq3ccu2 kernel module"
+        # Loop bauen
+        cd "${YAHM_DIR}/share/tools/kernel-modules/plat_eq3ccu2"
+        make
+        if [ $? -ne 0 ]
+        then
+            die "Problem while building plat_eq3ccu2 module, exit"
+        fi
+        cp plat_eq3ccu2.ko /lib/modules/$(uname -r)/kernel/drivers/char/
+
         progress "Building new UART kernel module"
         # fix falls bmc2709 Daten nicht vorhanden sind
         if [ ! -d /usr/src/linux/arch/arm/mach-bcm2709 ]
@@ -331,6 +346,11 @@ EOF
     then
         echo bcm2835_raw_uart >> /etc/modules
     fi
+    if [ $(cat /etc/modules | grep "^plat_eq3ccu2" | wc -l) -eq 0 ]
+    then
+        echo plat_eq3ccu2 >> /etc/modules
+    fi
+
 
     #################################################
     #   Anpassung YAHM Konfiguration
@@ -575,13 +595,15 @@ EOF
     # Treiber beim Booten nicht laden
     if [ $(cat /etc/modules | grep "^eq3_char_loop" | wc -l) -eq 1 ]
     then
-        echo eq3_char_loop >> /etc/modules
         sed -i '/eq3_char_loop/s/^/#/g' /etc/modules
     fi
     if [ $(cat /etc/modules | grep "^bcm2835_raw_uart" | wc -l) -eq 1 ]
     then
-        echo bcm2835_raw_uart >> /etc/modules
         sed -i '/bcm2835_raw_uart/s/^/#/g' /etc/modules
+    fi
+    if [ $(cat /etc/modules | grep "^plat_eq3ccu2" | wc -l) -eq 1 ]
+    then
+        sed -i '/plat_eq3ccu2/s/^/#/g' /etc/modules
     fi
 
     # Kernel updates zulassen
@@ -589,6 +611,16 @@ EOF
 
     lxc-attach -n ${LXCNAME} -- /etc/init.d/S61rfd restart
     lxc-attach -n ${LXCNAME} -- /etc/init.d/S61HMServer start
+
+    progress "Changing multimacd files"
+    # Init Skript
+    lxc-attach -n ${LXCNAME} -- sed -i /etc/init.d/S60multimacd -e "s/bcm2835-raw-uart/mxs_auart_raw.0/g"
+    # Multimac Config
+    lxc-attach -n ${LXCNAME} -- sed -i /etc/config/multimacd.conf -e "s/bcm2835-raw-uart/mxs_auart_raw.0/g"
+
+    progress "Removing Kernel Module"
+    rm  /lib/modules/$(uname -r)/kernel/drivers/char/broadcom/bcm2835_raw_uart.ko
+    depmod -a
 
     info "Homematic-IP interface was removed, please restart CCU2-LXC Container"
 }

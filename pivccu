@@ -1,0 +1,436 @@
+#!/bin/bash
+#
+# generic raw-uart solution based on pivccu: Alexander Reinert <alex@areinert.de>
+#
+
+description="HM-MOD-RPI-PCB + Homematic-IP (RaspberryPi/Raspbian)"
+module_version="0.1"
+# Default Parameter
+file_cmdline_txt='/boot/cmdline.txt'
+file_rfd_conf="${LXC_ROOT_FS}/usr/local/etc/config/rfd.conf"
+reboot=0 # Neustart ausfuehren
+
+kernel_version=$(uname -r | sed -e 's/-.*//i')
+if [ $(ver ${kernel_version}) -ge $(ver 4.4.9) ]
+then
+    overlay_file="pi3-miniuart-bt"
+else
+    overlay_file="pi3-miniuart-bt-overlay"
+fi
+
+set +e
+
+_module_install()
+{
+
+    # hilfsvariable
+    deb_kernel=0
+    WORK_DIR=$(mktemp -d)
+    # Aktuelle Kernel Version
+    kernel_version=$(uname -r | sed -e 's/-.*//i')
+
+    if [ -e ${LXC_ROOT_MODULES}/hm-mod-rpi-pcb ] && [ $IS_FORCE -ne 1 ]
+    then
+        die "ERROR: hm-mod-rpi-pcb must be uninstalled first to use this module"
+    fi
+
+    if [ -e ${LXC_ROOT_MODULES}/homematic-ip ] && [ $IS_FORCE -ne 1 ]
+    then
+        die "ERROR: homematic-ip module must be uninstalled first to use this module"
+    fi
+
+    [ "x$(id -un)" == "xroot" ] || die "Sorry, this script must be run as root. Try sudo ...."
+
+    # falls mmd_bidcos vorhanden ist, wurde homematic-ip bereits installiert
+    if [ -c /dev/bcm2835-raw-uart ] && [ $IS_FORCE -ne 1 ]
+    then
+        die "Homematic-IP module is present, please remove it first (reboot?)"
+    fi
+
+    # Container muss laufen
+    if [ $(lxc-info -n ${LXCNAME}|grep STOPPED|wc -l) -eq 1 ]
+    then
+        die "${LXCNAME} container is stopped, please start it first"
+    fi
+
+    info "Found hardware: $BOARD_TYPE $BOARD_VERSION"
+
+    if [ "$BOARD_TYPE" = "Raspberry Pi" ]
+    then
+        if [ ! -f /boot/config.txt ] && [ $IS_FORCE -ne 1 ]
+        then
+            die "ERROR: File /boot/config.txt does not exist!"
+        fi
+    fi
+
+    # Raspberry 2 oder 3 ?
+    if [ "$BOARD_TYPE" = "Raspberry Pi" ] && [ "$BOARD_VERSION" = "3" ]
+    then
+        progress "Trying to disable bluetooth on Raspberry Pi 3 to use HM-MOD-RPI-PCB"
+
+        if [ $(cat /boot/config.txt | grep ${overlay_file} | wc -l ) -eq 0 ]
+        then
+            echo -e "\n# Allow the normal UART pins to work\ndtoverlay=${overlay_file}\nenable_uart=1\nforce_turbo=1" >> /boot/config.txt
+            info "Modification /boot/config.txt done."
+            reboot=$((reboot+1))
+        fi
+    elif [ "$BOARD_TYPE" = "Raspberry Pi" ] && [ "$BOARD_VERSION" = "2" ]
+    then
+        if [ $(ver ${kernel_version}) -ge $(ver 4.4.9) ]
+        then
+            # enable_uart ist nicht vorhanden
+            if [ $(cat /boot/config.txt | grep "^enable_uart" | wc -l) -eq 0 ]
+            then
+                echo -e "\n# Allow the normal UART pins to work\nenable_uart=1" >> /boot/config.txt
+                info "Modification /boot/config.txt done."
+                reboot=$((reboot+1))
+            fi
+
+            if [ $(cat /boot/config.txt | grep "^enable_uart=0" | wc -l) -eq 1 ]
+            then
+                sed -i /boot/config.txt -e "s/enable_uart=0/enable_uart=1/"
+                info "Modification /boot/config.txt done."
+                reboot=$((reboot+1))
+            fi
+        fi
+    fi
+
+    # Disable serial
+    progress "Trying to disable serial console"
+    if [ ! -f $file_cmdline_txt ] && [ $IS_FORCE -ne 1 ]
+    then
+        die "ERROR: File $file_cmdline_txt does not exist!"
+    fi
+
+    if [ $(cat /boot/cmdline.txt|grep "console=serial0,115200"|wc -l) -gt 0 ];then
+        sed -i /boot/cmdline.txt -e "s/console=ttyAMA0,[0-9]\+ //"
+        sed -i /boot/cmdline.txt -e "s/console=serial0,[0-9]\+ //"
+        reboot=$((reboot+1))
+        info "Serial disabled successfully."
+    else
+        info "Serial already disabled"
+    fi
+
+    #################################################
+    #   Vorgehen im Zuge des Durchlaufs (Vorbereitsungsarbeiten)
+    #################################################
+
+    # load actual config
+    modprobe configs
+
+    # Kernel Version cleanup/check
+    if [ $IS_VERBOSE -eq 1 ]
+    then
+        info "DEBUG: Loaded Kernel:   ${kernel_version} "
+    fi
+
+    # Prüfung der Kernel Version von dem DEB Paket (apt-get Weg)
+    if [ -f /usr/share/doc/raspberrypi-bootloader/changelog.Debian.gz ]
+    then
+        deb_firmware_hash=$(zcat  /usr/share/doc/raspberrypi-bootloader/changelog.Debian.gz | grep -m1 -o '[0-9a-fA-F]\{40\}')
+        deb_hash=$(wget $QUIET -O-  -T 3 -t 1 https://raw.githubusercontent.com/raspberrypi/firmware/${deb_firmware_hash}/extra/git_hash)
+        deb_version=$(wget $QUIET -O-  -T 3 -t 1 https://raw.githubusercontent.com/raspberrypi/firmware/${deb_firmware_hash}/extra/uname_string7 | cut -d" " -f3 |  sed -e 's/-.*//i' )
+
+        if [ $IS_VERBOSE -eq 1 ]
+        then
+            info "DEBUG: DEB Kernel Hash: ${deb_version} (${deb_hash}); Firmware Hash: ${deb_firmware_hash}"
+        fi
+
+        deb_kernel=1
+    fi
+
+    # Prüfung der Kernel Version rpi-update weg
+    if [ -f /boot/.firmware_revision ]
+    then
+        rpi_firmware_hash=$(cat /boot/.firmware_revision)
+        rpi_hash=$(wget $QUIET -O-  -T 3 -t 1 https://raw.githubusercontent.com/Hexxeh/rpi-firmware/${rpi_firmware_hash}/git_hash)
+        rpi_version=$(wget $QUIET -O-  -T 3 -t 1 https://raw.githubusercontent.com/Hexxeh/rpi-firmware/${rpi_firmware_hash}/uname_string7 | cut -d" " -f3 |  sed -e 's/-.*//i' )
+
+        if [ $IS_VERBOSE -eq 1 ]
+        then
+            info "DEBUG: RPi Kernel Hash: ${rpi_version} (${rpi_hash}); Firmware Hash: ${rpi_firmware_hash}"
+        fi
+
+        # kernel is newer, deb kernel installed, rpi-update hash old -> new kernel installed via dpkg
+        if [ $(ver ${kernel_version}) -gt $(ver ${rpi_version}) ] && [ $deb_kernel -eq 1 ]
+        then
+            info "Actual kernel version is different/newer then last installed rpi-update version, cleaning up"
+            rm -rf  /boot/.firmware_revision
+
+        # Kernel is older then rpi-version
+        elif [ $(ver ${kernel_version}) -lt $(ver ${rpi_version}) ]
+        then
+            die "Something is wrong, last rpi-update version is ${rpi_version}, loaded kernel version is ${kernel_version}. If you recently updated your kernel with rpi-update, please restart first. Else please remove '/boot/.firmware_revision' file and start again"
+
+        # deb is not installed, kernel is newer then rpi-update version
+        elif [ $(ver ${kernel_version}) -gt $(ver ${rpi_version}) ]  && [ $deb_kernel -eq 0 ] && [ $(ver ${kernel_version}) -gt $(ver ${deb_version}) ]
+        then
+            die "Something is wrong, loaded kernel ${kernel_version} is newer then last rpi-update (${rpi_version}) or dpkg (${deb_version}) installed versions, own kernel buils are not supported"
+        fi
+    fi
+
+    # kernel is newer then rpi-update AND deb version
+    if  [ $(ver ${kernel_version}) -gt $(ver ${rpi_version}) ] && [ $(ver ${kernel_version}) -gt $(ver ${deb_version}) ]
+    then
+        die "Something is wrong, loaded kernel ${kernel_version} is newer then last rpi-update (${rpi_version}) or dpkg (${deb_version}) installed versions, own kernel buils are not supported"
+    fi
+    #################################################
+    #   Kernel Module bauen
+    #################################################
+    build_status=$(modprobe pl011_raw_uart &> /dev/null)
+    if [ $? -ne 0 ]
+    then
+        reboot=$((reboot+1))
+        if [ $IS_VERBOSE -eq 1 ]
+        then
+            APT_OUTPUT=""
+        else
+            APT_OUTPUT="-qq"
+        fi
+
+        # Alle Pakete auf den aktuellen Stand brin gen
+        progress "Updating sources"
+        apt-get ${APT_OUTPUT} update
+
+        # Abhängigkeiten installieren
+        progress "Installing dependencies"
+        apt-get ${APT_OUTPUT} -y install subversion bc gcc-4.9 make libncurses5-dev bc
+
+        info "Set right gcc version"
+        ln -sf /usr/bin/gcc-4.9 /usr/bin/gcc
+
+        #################################################
+        #   Kernel Sourcen laden
+        #################################################
+
+        progress "Found kernel $(uname -r) downloading sources..."
+        # aktuelle Kernel Headers runterladen
+        chmod +x /opt/YAHM/share/tools/rpi-source/rpi-source
+        /opt/YAHM/share/tools/rpi-source/rpi-source  -d /usr/src/
+
+        cd $WORK_DIR
+        # Download generic uart sources
+        cp -rf ${YAHM_DIR}/share/modules/share/pivccu/* .
+        cd kernel
+        # building
+        progress "Building kernel modules"
+        make
+        # copy binaries
+        mkdir -p /lib/modules/$(uname -r)/kernel/drivers/pivccu
+        cp *.ko /lib/modules/$(uname -r)/kernel/drivers/pivccu
+        # regenerate modules list
+        depmod -a
+    fi
+    #################################################
+    #   Overlay erstellen
+    #################################################
+    if [ ! -f /boot/overlays/pivccu-bcm2835.dtbo ]
+    then
+        progress "Creating overlay file"
+        dtc -@ -I dts -O dtb -o /boot/overlays/pivccu-bcm2835.dtbo ${YAHM_DIR}/share/modules/share/pivccu/pivccu-bcm2835.dts
+        reboot=$((reboot+1))
+    fi
+
+    if [ $(cat /boot/config.txt | grep "pivccu-bcm2835" | wc -l ) -eq 0 ]
+    then
+        progress "Changing /boot/config.txt"
+        echo "dtoverlay=pivccu-bcm2835" >> /boot/config.txt
+    fi
+
+    # multimacd needs rt scheduling to work
+    info "Setup Kernel Scheduler"
+    sysctl -w kernel.sched_rt_runtime_us=-1
+
+    # Treiber beim Booten laden
+    if [ $(cat /etc/modules | grep "^eq3_char_loop" | wc -l) -eq 0 ]
+    then
+        echo eq3_char_loop >> /etc/modules
+        reboot=$((reboot+1))
+    fi
+    if [ $(cat /etc/modules | grep "^plat_eq3ccu2" | wc -l) -eq 0 ]
+    then
+        echo plat_eq3ccu2 >> /etc/modules
+        reboot=$((reboot+1))
+    fi
+
+    progress "Preparing modification rfd.conf..."
+    if [ ! -f $file_rfd_conf ]
+    then
+	die "RDF.conf not found, maybe your YAHM instance is not running, please start it first"
+    fi
+    if [ $(cat $file_rfd_conf|grep "\[Interface 0\]"|wc -l) -eq 0 ];then
+        info "[Interface 0] block in rfd.conf not found, insert it..."
+        echo -e "\n[Interface 0]\nType = CCU2\nComPortFile = /dev/mmd_bidcos\n#AccessFile = /dev/null\n#ResetFile = /dev/ccu2-ic200" >> $file_rfd_conf
+        info "Insert in rfd.conf done."
+    else
+        info "[Interface 0] block found in rfd.conf checking it..."
+        # aendern
+        sed  -e 's/#\[Interface 0\]/\[Interface 0\]/' -i $file_rfd_conf
+        sed  -e 's/#Type = CCU2/Type = CCU2/' -i $file_rfd_conf
+        sed  -e 's/#ComPortFile = \/dev\/mmd_bidcos/ComPortFile = \/dev\/mmd_bidcos/' -i $file_rfd_conf
+
+        info "Modification rfd.conf done."
+    fi
+
+    progress "Changing multimacd files"
+    # Init Skript
+    lxc-attach -n ${LXCNAME} -- sed -i /etc/init.d/S60multimacd -e "s/bcm2835-raw-uart/mxs_auart_raw.0/g"
+    # Multimac Config
+    lxc-attach -n ${LXCNAME} -- sed -i /etc/config/multimacd.conf -e "s/bcm2835-raw-uart/mxs_auart_raw.0/g"
+
+    progress "Blocking new kernel updates, please do not use rpi-update anymore, or run this module after kernel update again"
+    echo raspberrypi-kernel hold | dpkg --set-selections
+
+    progress "Changing lxc config"
+    sed -i $LXC_ROOT/config -e "s/lxc.cgroup.devices.allow = c 245:1 rwm/lxc.cgroup.devices.allow = c 241:* rwm/"
+    sed -i $LXC_ROOT/config -e "s/lxc.cgroup.devices.allow = c 242:0 rwm/lxc.cgroup.devices.allow = c 242:* rwm/"
+    sed -i $LXC_ROOT/config -e "s/lxc.cgroup.devices.allow = c 243:0 rwm/lxc.cgroup.devices.allow = c 243:* rwm/"
+    sed -i $LXC_ROOT/config -e "s/lxc.cgroup.devices.allow = c 244:0 rwm/lxc.cgroup.devices.allow = c 244:* rwm/"
+    sed -i $LXC_ROOT/config -e "s/lxc.cgroup.devices.allow = c 245:0 rwm/lxc.cgroup.devices.allow = c 245:* rwm/"
+    sed -i $LXC_ROOT/config -e "s/lxc.cgroup.devices.allow = c 246:0 rwm/lxc.cgroup.devices.allow = c 246:* rwm/"
+
+    if [ $(cat $LXC_ROOT/config | grep "^lxc.hook.pre-start" | wc -l) -eq 0 ]
+    then
+        echo "lxc.hook.pre-start=/var/lib/yahm/pre-start.sh" >> $LXC_ROOT/config
+    fi
+
+    if [ $(cat $LXC_ROOT/config | grep "^lxc.hook.start" | wc -l) -eq 0 ]
+    then
+        echo "lxc.hook.start=/bin/yahm-start.sh" >> $LXC_ROOT/config
+    fi
+
+    progress "Copy startup files"
+    cp -rf  ${YAHM_DIR}/share/modules/share/pre-start.sh /var/lib/yahm/pre-start.sh
+    chmod +x /var/lib/yahm/pre-start.sh
+    cp -rf  ${YAHM_DIR}/share/modules/share/yahm-start.sh /var/lib/lxc/${LXCNAME}/rootfs/bin/yahm-start.sh
+    chmod +x /var/lib/lxc/${LXCNAME}/rootfs/bin/yahm-start.sh
+
+    # Reboot
+    if [ $reboot -gt 0 ]
+    then
+#        echo "======================================"
+#        echo "Rebooting in 60 seconds to apply settings (to chancel reboot type 'shutdown -c')..."
+#        echo "======================================"
+#        shutdown -r +1 "Rebooting to disable serial console"
+        info "PIVCCU was installed successfully, please restart your system to apply changes"
+    else
+        info "PIVCCU was installed successfully, please restart YAHM to apply changes"
+    fi
+}
+
+_module_remove()
+{
+
+    # Raspberry 2 oder 3 ?
+    if [ "$BOARD_TYPE" = "Raspberry Pi" ] && [ "$BOARD_VERSION" = "3" ]
+    then
+        progress "Trying to enable bluetooth"
+
+        if [ ! -f /boot/config.txt ] && [ $IS_FORCE -ne 1 ]
+        then
+            die "ERROR: File /boot/config.txt does not exist!"
+        fi
+
+        if [ $(cat /boot/config.txt | grep ${overlay_file} | wc -l ) -gt 0 ]
+        then
+            sed  -i '/^\# Allow the normal UART pins to work/d' /boot/config.txt
+            sed  -i "/^dtoverlay=${overlay_file}/d" /boot/config.txt
+            sed  -i "/^enable_uart=1/d" /boot/config.txt
+            sed  -i "/^force_turbo=1/d" /boot/config.txt
+            progress "Modification in /boot/config.txt is done."
+            reboot=$((reboot+1))
+        fi
+    fi
+
+    info "Disable pivccu overlay dts"
+    if [ $(cat /boot/config.txt | grep "pivccu-bcm2835" | wc -l ) -gt 1 ]
+    then
+        reboot=$((reboot+1))
+        progress "Changing /boot/config.txt"
+        sed -i /boot/config.txt -e '/dtoverlay=pivccu-bcm2835/d'
+        rm -rf /boot/overlay/pivccu-*
+        info "pivccu modifications in /boot/config.txt removed"
+    fi
+
+    info "Uninstall modification in rfd.conf..."
+    if [ $(cat $file_rfd_conf|grep "\[Interface 0\]"|wc -l) -gt 0 ];then
+        info "[Interface 0] block found in rfd.conf checking it..."
+        # aendern
+        sed  -e 's/\[Interface 0\]/#\[Interface 0\]/' -i $file_rfd_conf
+        sed  -e 's/Type = CCU2/#Type = CCU2/' -i $file_rfd_conf
+        sed  -e 's/Description = CCU2-Coprocessor/#Description = CCU2-Coprocessor/' -i $file_rfd_conf
+        sed  -e 's/ComPortFile = \/dev\/mmd_bidcos/#ComPortFile = \/dev\/mmd_bidcos/' -i $file_rfd_conf
+        sed  -e 's/AccessFile = \/dev\/null/#AccessFile = \/dev\/null/' -i $file_rfd_conf
+        sed  -e 's/ResetFile = \/dev\/ccu2-ic200/#ResetFile = \/dev\/ccu2-ic200/' -i $file_rfd_conf
+
+        progress "Uninstall modification in rfd.conf is done."
+    fi
+
+    if [ -d /lib/modules/$(uname -r)/kernel/drivers/pivccu ]
+    then
+        reboot=$((reboot+1))
+        info "Removing kernel modules"
+        if [ -d /lib/modules/$(uname -r)/kernel/drivers/pivccu ]
+        then
+            rm -rf /lib/modules/$(uname -r)/kernel/drivers/pivccu
+        fi
+        # regenerate modules list
+        depmod -a
+    fi
+
+    # Treiber beim Booten nicht laden
+    if [ $(cat /etc/modules | grep "^eq3_char_loop" | wc -l) -eq 1 ]
+    then
+        sed -i '/eq3_char_loop/s/^/#/g' /etc/modules
+        reboot=$((reboot+1))
+    fi
+    if [ $(cat /etc/modules | grep "^plat_eq3ccu2" | wc -l) -eq 1 ]
+    then
+        sed -i '/plat_eq3ccu2/s/^/#/g' /etc/modules
+        reboot=$((reboot+1))
+    fi
+
+    progress "Changing lxc config"
+    if [ $(cat $LXC_ROOT/config | grep "^lxc.hook.pre-start" | wc -l) -eq 1 ]
+    then
+        sed -i '/lxc.hook.pre-start/s/^/#/g' $LXC_ROOT/config
+    fi
+
+    if [ $(cat $LXC_ROOT/config | grep "^lxc.hook.start" | wc -l) -eq 1 ]
+    then
+        sed -i '/lxc.hook.start/s/^/#/g' $LXC_ROOT/config $LXC_ROOT/config
+    fi
+
+    # enable serial
+    info "Enable serial..."
+    if grep -q "console=ttyAMA0" $file_cmdline_txt;then
+        if [ -e /proc/device-tree/aliases/serial0 ]; then
+            sed -i $file_cmdline_txt -e "s/console=ttyAMA0/console=serial0/"
+            reboot=$((reboot+1))
+        fi
+        progress "Enable serial is done."
+    elif ! grep -q "console=ttyAMA0" $file_cmdline_txt && ! grep -q "console=serial0" $file_cmdline_txt; then
+        if [ -e /proc/device-tree/aliases/serial0 ]; then
+            sed -i $file_cmdline_txt -e "s/root=/console=serial0,115200 root=/"
+        else
+            sed -i $file_cmdline_txt -e "s/root=/console=ttyAMA0,115200 root=/"
+        fi
+        reboot=$((reboot+1))
+        progress "Enable serial is done."
+    fi
+
+    # Kernel updates zulassen
+    echo raspberrypi-kernel install | dpkg --set-selections
+
+    # Reboot
+    if [ $reboot -gt 0 ]
+    then
+        echo "======================================"
+        echo "Rebooting in 60 seconds to apply settings (to chancel reboot type 'shutdown -c')..."
+        echo "======================================"
+        shutdown -r +1 "Rebooting to enable serial console"
+    else
+        info "PIVCCU was uninstalled successfully"
+    fi
+
+}
