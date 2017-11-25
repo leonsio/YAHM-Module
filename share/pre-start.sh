@@ -3,7 +3,7 @@
 #LXC_ROOTFS_PATH=/var/lib/lxc/yahm/root
 #LXC_NAME=yahm
 
-if [ -f /var/lib/lxc/${LXC_NAME}/.modules/pivccu ] 
+if [ -f /var/lib/lxc/${LXC_NAME}/.modules/pivccu-driver ] 
 then
 	YAHM_KERNEL="pivccu"
 	YAHM_DEVICE="raw-uart"
