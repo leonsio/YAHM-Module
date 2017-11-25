@@ -188,7 +188,7 @@ _module_install()
 
         # Abhängigkeiten installieren
         progress "Installing dependencies"
-        apt-get ${APT_OUTPUT} -y install subversion bc gcc-4.9 make libncurses5-dev bc
+        apt-get ${APT_OUTPUT} -y install bc gcc-4.9 make libncurses5-dev bc
 
         info "Set right gcc version"
         ln -sf /usr/bin/gcc-4.9 /usr/bin/gcc
@@ -197,17 +197,22 @@ _module_install()
         #   Kernel Sourcen laden
         #################################################
 
-        progress "Found kernel $(uname -r) downloading sources..."
+        progress "Found kernel $(uname -r) downloading sources und building dependencies (5-10 min) "
         # aktuelle Kernel Headers runterladen
         chmod +x /opt/YAHM/share/tools/rpi-source/rpi-source
-        /opt/YAHM/share/tools/rpi-source/rpi-source  -d /usr/src/
+        /opt/YAHM/share/tools/rpi-source/rpi-source -d /usr/src/
+
+        if [ ! -d /lib/modules/$(uname -r)/kernel/drivers ]
+        then
+            die "Something is wrong, can not find build directory"
+        fi
 
         cd $WORK_DIR
         # Download generic uart sources
         cp -rf ${YAHM_DIR}/share/modules/share/pivccu/* .
         cd kernel
         # building
-        progress "Building kernel modules"
+        progress "Building eq3 kernel modules"
         make
         # copy binaries
         mkdir -p /lib/modules/$(uname -r)/kernel/drivers/pivccu
@@ -271,9 +276,9 @@ _module_install()
     # Init Skript
     sed -i ${LXC_ROOT_FS}/etc/init.d/S60multimacd -e "s/bcm2835-raw-uart/mxs_auart_raw.0/g"
     # Multimac Config
-    if [ ! -f ${LXC_ROOT_FS}/usr/local/config/multimacd.conf  ]
+    if [ ! -f ${LXC_ROOT_FS}/usr/local/etc/config/multimacd.conf  ]
     then
-        cp ${LXC_ROOT_FS}/etc/config_templates/multimacd.conf  ${LXC_ROOT_FS}/usr/local/config/multimacd.conf
+        cp ${LXC_ROOT_FS}/etc/config_templates/multimacd.conf  ${LXC_ROOT_FS}/usr/local/etc/config/multimacd.conf
     fi
     sed -i ${LXC_ROOT_FS}/usr/local/config/multimacd.conf -e "s/bcm2835-raw-uart/mxs_auart_raw.0/g"
 
