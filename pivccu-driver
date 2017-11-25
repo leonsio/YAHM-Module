@@ -280,7 +280,7 @@ _module_install()
     then
         cp ${LXC_ROOT_FS}/etc/config_templates/multimacd.conf  ${LXC_ROOT_FS}/usr/local/etc/config/multimacd.conf
     fi
-    sed -i ${LXC_ROOT_FS}/usr/local/config/multimacd.conf -e "s/bcm2835-raw-uart/mxs_auart_raw.0/g"
+    sed -i ${LXC_ROOT_FS}/usr/local/etc/config/multimacd.conf -e "s/bcm2835-raw-uart/mxs_auart_raw.0/g"
 
     progress "Blocking new kernel updates, please do not use rpi-update anymore, or run this module after kernel update again"
     echo raspberrypi-kernel hold | dpkg --set-selections
