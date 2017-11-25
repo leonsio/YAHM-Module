@@ -47,12 +47,6 @@ _module_install()
         die "Homematic-IP module is present, please remove it first (reboot?)"
     fi
 
-    # Container muss laufen
-    if [ $(lxc-info -n ${LXCNAME}|grep STOPPED|wc -l) -eq 1 ]
-    then
-        die "${LXCNAME} container is stopped, please start it first"
-    fi
-
     info "Found hardware: $BOARD_TYPE $BOARD_VERSION"
 
     if [ "$BOARD_TYPE" = "Raspberry Pi" ]
@@ -256,9 +250,10 @@ _module_install()
     progress "Preparing modification rfd.conf..."
     if [ ! -f $file_rfd_conf ]
     then
-	die "RDF.conf not found, maybe your YAHM instance is not running, please start it first"
+	    cp ${LXC_ROOT_FS}/etc/config_templates/rfd.conf $file_rfd_conf
     fi
-    if [ $(cat $file_rfd_conf|grep "\[Interface 0\]"|wc -l) -eq 0 ];then
+
+    if [ $(cat $file_rfd_conf | grep "\[Interface 0\]"|wc -l) -eq 0 ];then
         info "[Interface 0] block in rfd.conf not found, insert it..."
         echo -e "\n[Interface 0]\nType = CCU2\nComPortFile = /dev/mmd_bidcos\n#AccessFile = /dev/null\n#ResetFile = /dev/ccu2-ic200" >> $file_rfd_conf
         info "Insert in rfd.conf done."
@@ -274,9 +269,13 @@ _module_install()
 
     progress "Changing multimacd files"
     # Init Skript
-    lxc-attach -n ${LXCNAME} -- sed -i /etc/init.d/S60multimacd -e "s/bcm2835-raw-uart/mxs_auart_raw.0/g"
+    sed -i ${LXC_ROOT_FS}/etc/init.d/S60multimacd -e "s/bcm2835-raw-uart/mxs_auart_raw.0/g"
     # Multimac Config
-    lxc-attach -n ${LXCNAME} -- sed -i /etc/config/multimacd.conf -e "s/bcm2835-raw-uart/mxs_auart_raw.0/g"
+    if [ ! -f ${LXC_ROOT_FS}/usr/local/config/multimacd.conf  ]
+    then
+        cp ${LXC_ROOT_FS}/etc/config_templates/multimacd.conf  ${LXC_ROOT_FS}/usr/local/config/multimacd.conf
+    fi
+    sed -i ${LXC_ROOT_FS}/usr/local/config/multimacd.conf -e "s/bcm2835-raw-uart/mxs_auart_raw.0/g"
 
     progress "Blocking new kernel updates, please do not use rpi-update anymore, or run this module after kernel update again"
     echo raspberrypi-kernel hold | dpkg --set-selections
