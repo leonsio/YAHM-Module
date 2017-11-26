@@ -163,6 +163,7 @@ _module_install()
         # aktuelle Kernel Headers runterladen
         chmod +x /opt/YAHM/share/tools/rpi-source/rpi-source
         /opt/YAHM/share/tools/rpi-source/rpi-source --nomake  -d /usr/src/
+        chmod 644 /opt/YAHM/share/tools/rpi-source/rpi-source
 
         progress "Preparing raspberry kernel configuration"
         # enter src folder

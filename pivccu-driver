@@ -201,6 +201,7 @@ _module_install()
         # aktuelle Kernel Headers runterladen
         chmod +x /opt/YAHM/share/tools/rpi-source/rpi-source
         /opt/YAHM/share/tools/rpi-source/rpi-source -d /usr/src/
+        chmod 644 /opt/YAHM/share/tools/rpi-source/rpi-source
 
         if [ ! -d /lib/modules/$(uname -r)/kernel/drivers ]
         then
