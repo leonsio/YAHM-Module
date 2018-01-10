@@ -215,6 +215,10 @@ _module_install()
         # building
         progress "Building eq3 kernel modules"
         make
+        if [ $? -ne 0 ]
+        then
+            die "ERROR: Problem while building eq3 module, exit"
+        fi 
         # copy binaries
         mkdir -p /lib/modules/$(uname -r)/kernel/drivers/pivccu
         cp *.ko /lib/modules/$(uname -r)/kernel/drivers/pivccu
