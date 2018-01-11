@@ -3,19 +3,41 @@
 # generic raw-uart solution based on pivccu: Alexander Reinert <alex@areinert.de>
 #
 
-description="HM-MOD-RPI-PCB + Homematic-IP (RaspberryPi/Raspbian)"
-module_version="0.1"
+description="Driver for HM-MOD-RPI-PCB with Homematic-IP for Raspbian and Armbian"
+module_version="0.2"
+
 # Default Parameter
-file_cmdline_txt='/boot/cmdline.txt'
 file_rfd_conf="${LXC_ROOT_FS}/usr/local/etc/config/rfd.conf"
-reboot=0 # Neustart ausfuehren
+reboot=0 # Neustart notwendig
 
 kernel_version=$(uname -r | sed -e 's/-.*//i')
-if [ $(ver ${kernel_version}) -ge $(ver 4.4.9) ]
+if [ $IS_VERBOSE -eq 1 ]
 then
-    overlay_file="pi3-miniuart-bt"
+    APT_OUTPUT=""
 else
-    overlay_file="pi3-miniuart-bt-overlay"
+    APT_OUTPUT="-qq"
+fi
+
+if [ -f /etc/armbian-release ]
+then
+
+    running_os="armbian"
+
+elif [ $(/usr/bin/lsb_release -is) = "Raspbian" ]
+then
+
+    running_os="raspbian"
+    deb_kernel=0 # hilfsvariable
+    file_cmdline_txt='/boot/cmdline.txt'
+
+    if [ $(ver ${kernel_version}) -ge $(ver 4.4.9) ]
+    then
+        overlay_file="pi3-miniuart-bt"
+    else
+        overlay_file="pi3-miniuart-bt-overlay"
+    fi
+else
+    die "can not detect operation system, currently only supported raspbian and armbian"
 fi
 
 set +e
@@ -23,8 +45,6 @@ set +e
 _module_install()
 {
 
-    # hilfsvariable
-    deb_kernel=0
     WORK_DIR=$(mktemp -d)
     # Aktuelle Kernel Version
     kernel_version=$(uname -r | sed -e 's/-.*//i')
@@ -48,198 +68,369 @@ _module_install()
     fi
 
     info "Found hardware: $BOARD_TYPE $BOARD_VERSION"
-
-    if [ "$BOARD_TYPE" = "Raspberry Pi" ]
-    then
-        if [ ! -f /boot/config.txt ] && [ $IS_FORCE -ne 1 ]
-        then
-            die "ERROR: File /boot/config.txt does not exist!"
-        fi
-    fi
-
-    # Raspberry 2 oder 3 ?
-    if [ "$BOARD_TYPE" = "Raspberry Pi" ] && [ "$BOARD_VERSION" = "3" ]
-    then
-        progress "Trying to disable bluetooth on Raspberry Pi 3 to use HM-MOD-RPI-PCB"
-
-        if [ $(cat /boot/config.txt | grep ${overlay_file} | wc -l ) -eq 0 ]
-        then
-            echo -e "\n# Allow the normal UART pins to work\ndtoverlay=${overlay_file}\nenable_uart=1\nforce_turbo=1" >> /boot/config.txt
-            info "Modification /boot/config.txt done."
-            reboot=$((reboot+1))
-        fi
-    elif [ "$BOARD_TYPE" = "Raspberry Pi" ] && [ "$BOARD_VERSION" = "2" ]
-    then
-        if [ $(ver ${kernel_version}) -ge $(ver 4.4.9) ]
-        then
-            # enable_uart ist nicht vorhanden
-            if [ $(cat /boot/config.txt | grep "^enable_uart" | wc -l) -eq 0 ]
-            then
-                echo -e "\n# Allow the normal UART pins to work\nenable_uart=1" >> /boot/config.txt
-                info "Modification /boot/config.txt done."
-                reboot=$((reboot+1))
-            fi
-
-            if [ $(cat /boot/config.txt | grep "^enable_uart=0" | wc -l) -eq 1 ]
-            then
-                sed -i /boot/config.txt -e "s/enable_uart=0/enable_uart=1/"
-                info "Modification /boot/config.txt done."
-                reboot=$((reboot+1))
-            fi
-        fi
-    fi
-
-    # Disable serial
-    progress "Trying to disable serial console"
-    if [ ! -f $file_cmdline_txt ] && [ $IS_FORCE -ne 1 ]
-    then
-        die "ERROR: File $file_cmdline_txt does not exist!"
-    fi
-
-    if [ $(cat /boot/cmdline.txt|grep "console=serial0,115200"|wc -l) -gt 0 ];then
-        sed -i /boot/cmdline.txt -e "s/console=ttyAMA0,[0-9]\+ //"
-        sed -i /boot/cmdline.txt -e "s/console=serial0,[0-9]\+ //"
-        reboot=$((reboot+1))
-        info "Serial disabled successfully."
-    else
-        info "Serial already disabled"
-    fi
-
-    #################################################
-    #   Vorgehen im Zuge des Durchlaufs (Vorbereitsungsarbeiten)
-    #################################################
+    info "Found OS: $running_os"
+    info "Found kernel:   ${kernel_version} "
 
     # load actual config
     modprobe configs
 
-    # Kernel Version cleanup/check
-    if [ $IS_VERBOSE -eq 1 ]
-    then
-        info "DEBUG: Loaded Kernel:   ${kernel_version} "
-    fi
+    ################################
+    #  OS/Board specific settings  #
+    ################################
 
-    # Prüfung der Kernel Version von dem DEB Paket (apt-get Weg)
-    if [ -f /usr/share/doc/raspberrypi-bootloader/changelog.Debian.gz ]
+    if [ $running_os = "raspbian" ]
     then
-        deb_firmware_hash=$(zcat  /usr/share/doc/raspberrypi-bootloader/changelog.Debian.gz | grep -m1 -o '[0-9a-fA-F]\{40\}')
-        deb_hash=$(wget $QUIET -O-  -T 3 -t 1 https://raw.githubusercontent.com/raspberrypi/firmware/${deb_firmware_hash}/extra/git_hash)
-        deb_version=$(wget $QUIET -O-  -T 3 -t 1 https://raw.githubusercontent.com/raspberrypi/firmware/${deb_firmware_hash}/extra/uname_string7 | cut -d" " -f3 |  sed -e 's/-.*//i' )
 
-        if [ $IS_VERBOSE -eq 1 ]
+        if [ "$BOARD_TYPE" = "Raspberry Pi" ]
         then
-            info "DEBUG: DEB Kernel Hash: ${deb_version} (${deb_hash}); Firmware Hash: ${deb_firmware_hash}"
+            if [ ! -f /boot/config.txt ] && [ $IS_FORCE -ne 1 ]
+            then
+                die "ERROR: File /boot/config.txt does not exist!"
+            fi
         fi
 
-        deb_kernel=1
-    fi
-
-    # Prüfung der Kernel Version rpi-update weg
-    if [ -f /boot/.firmware_revision ]
-    then
-        rpi_firmware_hash=$(cat /boot/.firmware_revision)
-        rpi_hash=$(wget $QUIET -O-  -T 3 -t 1 https://raw.githubusercontent.com/Hexxeh/rpi-firmware/${rpi_firmware_hash}/git_hash)
-        rpi_version=$(wget $QUIET -O-  -T 3 -t 1 https://raw.githubusercontent.com/Hexxeh/rpi-firmware/${rpi_firmware_hash}/uname_string7 | cut -d" " -f3 |  sed -e 's/-.*//i' )
-
-        if [ $IS_VERBOSE -eq 1 ]
+        # Raspberry 2 oder 3 ?
+        if [ "$BOARD_TYPE" = "Raspberry Pi" ] && [ "$BOARD_VERSION" = "3" ]
         then
-            info "DEBUG: RPi Kernel Hash: ${rpi_version} (${rpi_hash}); Firmware Hash: ${rpi_firmware_hash}"
+            progress "Trying to disable bluetooth on Raspberry Pi 3 to use HM-MOD-RPI-PCB"
+
+            if [ $(cat /boot/config.txt | grep ${overlay_file} | wc -l ) -eq 0 ]
+            then
+                echo -e "\n# Allow the normal UART pins to work\ndtoverlay=${overlay_file}\nenable_uart=1\nforce_turbo=1" >> /boot/config.txt
+                info "Modification /boot/config.txt done."
+                reboot=$((reboot+1))
+            fi
+        elif [ "$BOARD_TYPE" = "Raspberry Pi" ] && [ "$BOARD_VERSION" = "2" ]
+        then
+            if [ $(ver ${kernel_version}) -ge $(ver 4.4.9) ]
+            then
+                # enable_uart ist nicht vorhanden
+                if [ $(cat /boot/config.txt | grep "^enable_uart" | wc -l) -eq 0 ]
+                then
+                    echo -e "\n# Allow the normal UART pins to work\nenable_uart=1" >> /boot/config.txt
+                    info "Modification /boot/config.txt done."
+                    reboot=$((reboot+1))
+                fi
+
+                if [ $(cat /boot/config.txt | grep "^enable_uart=0" | wc -l) -eq 1 ]
+                then
+                    sed -i /boot/config.txt -e "s/enable_uart=0/enable_uart=1/"
+                    info "Modification /boot/config.txt done."
+                    reboot=$((reboot+1))
+                fi
+            fi
         fi
 
-        # kernel is newer, deb kernel installed, rpi-update hash old -> new kernel installed via dpkg
-        if [ $(ver ${kernel_version}) -gt $(ver ${rpi_version}) ] && [ $deb_kernel -eq 1 ]
+        # Disable serial
+        progress "Trying to disable serial console"
+        if [ ! -f $file_cmdline_txt ] && [ $IS_FORCE -ne 1 ]
         then
-            info "Actual kernel version is different/newer then last installed rpi-update version, cleaning up"
-            rm -rf  /boot/.firmware_revision
-
-        # Kernel is older then rpi-version
-        elif [ $(ver ${kernel_version}) -lt $(ver ${rpi_version}) ]
-        then
-            die "Something is wrong, last rpi-update version is ${rpi_version}, loaded kernel version is ${kernel_version}. If you recently updated your kernel with rpi-update, please restart first. Else please remove '/boot/.firmware_revision' file and start again"
-
-        # deb is not installed, kernel is newer then rpi-update version
-        elif [ $(ver ${kernel_version}) -gt $(ver ${rpi_version}) ]  && [ $deb_kernel -eq 0 ] && [ $(ver ${kernel_version}) -gt $(ver ${deb_version}) ]
-        then
-            die "Something is wrong, loaded kernel ${kernel_version} is newer then last rpi-update (${rpi_version}) or dpkg (${deb_version}) installed versions, own kernel buils are not supported"
+            die "ERROR: File $file_cmdline_txt does not exist!"
         fi
+
+        if [ $(cat /boot/cmdline.txt|grep "console=serial0,115200"|wc -l) -gt 0 ];then
+            sed -i /boot/cmdline.txt -e "s/console=ttyAMA0,[0-9]\+ //"
+            sed -i /boot/cmdline.txt -e "s/console=serial0,[0-9]\+ //"
+            reboot=$((reboot+1))
+            info "Serial disabled successfully."
+        else
+            info "Serial already disabled"
+        fi
+
     fi
 
-    # kernel is newer then rpi-update AND deb version
-    if  [ $(ver ${kernel_version}) -gt $(ver ${rpi_version}) ] && [ $(ver ${kernel_version}) -gt $(ver ${deb_version}) ]
-    then
-        die "Something is wrong, loaded kernel ${kernel_version} is newer then last rpi-update (${rpi_version}) or dpkg (${deb_version}) installed versions, own kernel buils are not supported"
-    fi
-    #################################################
-    #   Kernel Module bauen
-    #################################################
+    # if module already build and loaded -> skipping
     build_status=$(modprobe pl011_raw_uart &> /dev/null)
     if [ $? -ne 0 ]
     then
-        reboot=$((reboot+1))
-        if [ $IS_VERBOSE -eq 1 ]
-        then
-            APT_OUTPUT=""
-        else
-            APT_OUTPUT="-qq"
-        fi
+
+        ################################################
+        # Downloading/Installing kernel source/headers #
+        ################################################
 
         # Alle Pakete auf den aktuellen Stand brin gen
         progress "Updating sources"
         apt-get ${APT_OUTPUT} update
 
-        # Abhängigkeiten installieren
-        progress "Installing dependencies"
-        apt-get ${APT_OUTPUT} -y install bc gcc-4.9 make libncurses5-dev bc
+        info "Downloading/Installing kernel sources/headers "
 
-        info "Set right gcc version"
-        ln -sf /usr/bin/gcc-4.9 /usr/bin/gcc
-
-        #################################################
-        #   Kernel Sourcen laden
-        #################################################
-
-        progress "Found kernel $(uname -r) downloading sources und building dependencies (5-10 min) "
-        # aktuelle Kernel Headers runterladen
-        chmod +x /opt/YAHM/share/tools/rpi-source/rpi-source
-        /opt/YAHM/share/tools/rpi-source/rpi-source -d /usr/src/
-        chmod 644 /opt/YAHM/share/tools/rpi-source/rpi-source
-
-        if [ ! -d /lib/modules/$(uname -r)/kernel/drivers ]
+        # Raspbian with rpi-source
+        # Kernel Version cleanup/check
+        if [ $running_os = "raspbian" ]
         then
-            die "Something is wrong, can not find build directory"
+
+            # Prüfung der Kernel Version von dem DEB Paket (apt-get Weg)
+            if [ -f /usr/share/doc/raspberrypi-bootloader/changelog.Debian.gz ]
+            then
+                deb_firmware_hash=$(zcat  /usr/share/doc/raspberrypi-bootloader/changelog.Debian.gz | grep -m1 -o '[0-9a-fA-F]\{40\}')
+                deb_hash=$(wget $QUIET -O-  -T 3 -t 1 https://raw.githubusercontent.com/raspberrypi/firmware/${deb_firmware_hash}/extra/git_hash)
+                deb_version=$(wget $QUIET -O-  -T 3 -t 1 https://raw.githubusercontent.com/raspberrypi/firmware/${deb_firmware_hash}/extra/uname_string7 | cut -d" " -f3 |  sed -e 's/-.*//i' )
+
+                if [ $IS_VERBOSE -eq 1 ]
+                then
+                    info "DEBUG: DEB Kernel Hash: ${deb_version} (${deb_hash}); Firmware Hash: ${deb_firmware_hash}"
+                fi
+
+                deb_kernel=1
+            fi
+
+            # Prüfung der Kernel Version rpi-update weg
+            if [ -f /boot/.firmware_revision ]
+            then
+                rpi_firmware_hash=$(cat /boot/.firmware_revision)
+                rpi_hash=$(wget $QUIET -O-  -T 3 -t 1 https://raw.githubusercontent.com/Hexxeh/rpi-firmware/${rpi_firmware_hash}/git_hash)
+                rpi_version=$(wget $QUIET -O-  -T 3 -t 1 https://raw.githubusercontent.com/Hexxeh/rpi-firmware/${rpi_firmware_hash}/uname_string7 | cut -d" " -f3 |  sed -e 's/-.*//i' )
+
+                if [ $IS_VERBOSE -eq 1 ]
+                then
+                    info "DEBUG: RPi Kernel Hash: ${rpi_version} (${rpi_hash}); Firmware Hash: ${rpi_firmware_hash}"
+                fi
+
+                # kernel is newer, deb kernel installed, rpi-update hash old -> new kernel installed via dpkg
+                if [ $(ver ${kernel_version}) -gt $(ver ${rpi_version}) ] && [ $deb_kernel -eq 1 ]
+                then
+                    info "Actual kernel version is different/newer then last installed rpi-update version, cleaning up"
+                    rm -rf  /boot/.firmware_revision
+
+                # Kernel is older then rpi-version
+                elif [ $(ver ${kernel_version}) -lt $(ver ${rpi_version}) ]
+                then
+                    die "Something is wrong, last rpi-update version is ${rpi_version}, loaded kernel version is ${kernel_version}. If you recently updated your kernel with rpi-update, please restart first. Else please remove '/boot/.firmware_revision' file and start again"
+
+                # deb is not installed, kernel is newer then rpi-update version
+                elif [ $(ver ${kernel_version}) -gt $(ver ${rpi_version}) ]  && [ $deb_kernel -eq 0 ] && [ $(ver ${kernel_version}) -gt $(ver ${deb_version}) ]
+                then
+                    die "Something is wrong, loaded kernel ${kernel_version} is newer then last rpi-update (${rpi_version}) or dpkg (${deb_version}) installed versions, own kernel buils are not supported"
+                fi
+            fi
+
+            # kernel is newer then rpi-update AND deb version
+            if  [ $(ver ${kernel_version}) -gt $(ver ${rpi_version}) ] && [ $(ver ${kernel_version}) -gt $(ver ${deb_version}) ]
+            then
+                die "Something is wrong, loaded kernel ${kernel_version} is newer then last rpi-update (${rpi_version}) or dpkg (${deb_version}) installed versions, own/custom kernel buils are not supported"
+            fi
+
+
+            # Abhängigkeiten installieren
+            progress "Installing dependencies"
+            apt-get ${APT_OUTPUT} -y install bc gcc-4.9 make libncurses5-dev
+
+            info "Set right gcc version"
+            ln -sf /usr/bin/gcc-4.9 /usr/bin/gcc
+
+            progress "Found kernel $(uname -r) downloading sources from git und prepare kernel modules (5-10 min) "
+            # aktuelle Kernel Headers runterladen
+            chmod +x ${YAHM_DIR}/share/tools/rpi-source/rpi-source
+            ${YAHM_DIR}/share/tools/rpi-source/rpi-source -d /usr/src/
+            chmod 644 ${YAHM_DIR}/share/tools/rpi-source/rpi-source
+
+            if [ ! -d /lib/modules/$(uname -r)/kernel/drivers ]
+            then
+                die "Something is wrong, can not find build directory"
+            fi
+
+            progress "Blocking new kernel updates, please do not use rpi-update anymore, or run this module after kernel update again"
+            echo raspberrypi-kernel hold | dpkg --set-selections
         fi
+
+        # Armbian with apt-get
+        if [ $running_os = "armbian" ]
+        then
+
+            source /etc/armbian-release
+            TARGET_BRANCH=$BRANCH
+            TARGET_FAMILY=$LINUXFAMILY
+            UBOOT_BRANCH=$TARGET_BRANCH # uboot naming is different
+
+            if [[ $TARGET_BRANCH == "default" ]]; then TARGET_BRANCH=""; else TARGET_BRANCH="-"$TARGET_BRANCH; fi
+            if [[ $TARGET_FAMILY == sun*i ]]; then
+                TARGET_FAMILY="sunxi"
+                if [[ $UBOOT_BRANCH == "default" ]]; then
+                    TARGET_FAMILY=$(cat /proc/cpuinfo | grep "Hardware" | sed 's/^.*Allwinner //' | awk '{print $1;}')
+                fi
+            fi
+
+            progress "Found kernel $(uname -r) downloading source file: linux-headers${TARGET_BRANCH}-${TARGET_FAMILY}"
+            apt-get ${APT_OUTPUT} -y install linux-headers${TARGET_BRANCH}-${TARGET_FAMILY}
+        fi
+
+
+        ###########################
+        # Building kernel modules #
+        ###########################
+
+        info "Installing kernel modules"
 
         cd $WORK_DIR
         # Download generic uart sources
-        cp -rf ${YAHM_DIR}/share/modules/share/pivccu/* .
+        cp -rf ${YAHM_DIR}/share/modules/share/piVCCU/* .
         cd kernel
+        cp ${YAHM_DIR}/share/modules/share/kernel-modules/eq3_char_loop/*.c .
+
         # building
         progress "Building eq3 kernel modules"
         make
         if [ $? -ne 0 ]
         then
             die "ERROR: Problem while building eq3 module, exit"
-        fi 
+        fi
+
         # copy binaries
         mkdir -p /lib/modules/$(uname -r)/kernel/drivers/pivccu
         cp *.ko /lib/modules/$(uname -r)/kernel/drivers/pivccu
+
         # regenerate modules list
+        progress "Regenerating modules.dep and map files"
         depmod -a
     fi
+
     #################################################
     #   Overlay erstellen
     #################################################
-    if [ ! -f /boot/overlays/pivccu-bcm2835.dtbo ]
+
+    info "Installing/Setup overlay file"
+
+    if [ -e /proc/device-tree/compatible ]
     then
-        progress "Creating overlay file"
-        dtc -@ -I dts -O dtb -o /boot/overlays/pivccu-bcm2835.dtbo ${YAHM_DIR}/share/modules/share/pivccu/pivccu-bcm2835.dts
-        reboot=$((reboot+1))
+        for str in `strings /proc/device-tree/compatible`
+        do
+            case $str in
+                xunlong,orangepi-one|xunlong,orangepi-lite|xunlong,orangepi-plus|xunlong,orangepi-plus2e|xunlong,orangepi-2|xunlong,orangepi-pc|xunlong,orangepi-pc-plus)
+                    OVERLAY_MODE='overlay'
+                    OVERLAY_FILE='pivccu-sun8i-h3.dtbo'
+                    break
+                    ;;
+                brcm,bcm2837brcm,bcm2836|brcm,bcm2836)
+                    OVERLAY_MODE='overlay'
+                    OVERLAY_FILE='pivccu-bcm2835.dtbo'
+                    break
+                    ;;
+                rockchip,rk3288-miniarm|asus,rk3288-tinker)
+                    OVERLAY_MODE='patch'
+                    INCLUDE_FILE="${YAHM_DIR}/share/modules/share/piVCCU/dts/armbian/tinkerboard.dts.include"
+                    break
+                    ;;
+                *)
+                    OVERLAY_MODE="overlay"
+                    OVERLAY_FILE="unsupported"
+                    break
+                    ;;
+            esac
+        done
     fi
 
-    if [ $(cat /boot/config.txt | grep "pivccu-bcm2835" | wc -l ) -eq 0 ]
-    then
-        progress "Changing /boot/config.txt"
-        echo "dtoverlay=pivccu-bcm2835" >> /boot/config.txt
-    fi
+    case "$OVERLAY_MODE" in
+        patch)
+            TMP_DIR=`mktemp -d`
+            if [ -e /boot/armbianEnv.txt ]
+            then
+                FDT_FILE=`grep -e '^fdt_file=' /boot/armbianEnv.txt | cut -d= -f2`
+            else
+                die "ERROR: armbianEnv.txt not found"
+            fi
+
+            if [ -z "$FDT_FILE" ]
+            then
+                die "piVCCU: Error! Current FDT could not be determined"
+            fi
+
+            if [ -z "$INCLUDE_FILE" ]
+            then
+                die "piVCCU: Error! Hardware platform is not supported"
+            fi
+
+            dtc -I dtb -O dts $QUIET -o $TMP_DIR/devicetree.dts /boot/dtb/$FDT_FILE
+
+            if [ `grep -c -e 'compatible = "pivccu,' $TMP_DIR/devicetree.dts` -eq 0 ]
+            then
+                info "piVCCU: Patching DTB $FDT_FILE"
+                # backup original file
+                cp /boot/dtb/$FDT_FILE /boot/dtb/$FDT_FILE.bak
+                # patching dts file
+                cat $INCLUDE_FILE >> $TMP_DIR/devicetree.dts
+                # creating dtb file
+                dtc -I dts -O dtb $QUIET -o $TMP_DIR/$FDT_FILE $TMP_DIR/devicetree.dts
+                # installing dtb file
+                cp $TMP_DIR/$FDT_FILE /boot/dtb
+            fi
+            reboot=$((reboot+1))
+            rm -rf $TMP_DIR
+            ;;
+        overlay)
+            TMP_DIR=`mktemp -d`
+            cp -rf ${YAHM_DIR}/share/modules/share/piVCCU/dts $TMP_DIR
+
+            if [ -z "${TMP_DIR}/dts/${OVERLAY_FILE}" ]
+            then
+                die "ERROR: Overlay file ${OVERLAY_FILE} not found or hardware not supported"
+            fi
+
+            # converting dtb to ascii dts
+            DTC_VERSION=$(dtc --version | cut -d" " -f3)
+            if [ $(ver ${DTC_VERSION}) -lt $(ver 1.4.4) ]
+            then
+                info "Must updating device tree compiler for symlink support"
+                cd $TMP_DIR/
+
+                progress "Installing dependencies"
+                apt-get ${APT_OUTPUT} -y install bison flex
+
+                progress "Cloning repository"
+                git clone git://git.kernel.org/pub/scm/utils/dtc/dtc.git
+
+                progress "Building device tree compiler"
+                cd dtc
+                make
+                cp libfdt/libfdt*.so /usr/lib/
+                cp dtc fdtdump fdtget fdtput /usr/bin/
+
+            fi
+
+            progress "Creating Overlay files"
+            cd $TMP_DIR/dts
+            for dts in $(find *.dts -type f)
+            do
+                dtc -@ -I dts -O dtb -o ${dts%.dts}.dtbo $dts
+            done
+
+            OVERLAY=`basename "$OVERLAY_FILE" .dtbo`
+
+            if [ $running_os = "raspbian" ]
+            then
+                # check if exists
+                if [ $(cat /boot/config.txt | grep "${OVERLAY}" | wc -l ) -eq 0 ]
+                then
+                    progress "Changing /boot/config.txt"
+                    echo "dtoverlay=${OVERLAY}" >> /boot/config.txt
+                fi
+                # copy all files
+                cp -r $TMP_DIR/dts/*.dtbo /boot/overlays/
+            fi
+
+            if [ $running_os = "armbian" ]
+            then
+                # check if exists
+                if [ `grep -c "^user_overlays=" /boot/armbianEnv.txt` -eq 0 ]
+                then
+                    progress "Changing /boot/armbianEnv.txt"
+                    echo "user_overlays=$OVERLAY" >> /boot/armbianEnv.txt
+                elif [ `grep -c "^user_overlays=.*$OVERLAY.*" /boot/armbianEnv.txt` -eq 0 ]
+                then
+                    progress "Changing /boot/armbianEnv.txt"
+                    sed -i "s/^user_overlays=/user_overlays=$OVERLAY /" /boot/armbianEnv.txt
+                fi
+                # copy all files
+                mkdir -p /boot/overlay-user
+                cp -r $TMP_DIR/dts/*.dtbo /boot/overlay-user/
+            fi
+            reboot=$((reboot+1))
+            rm -rf $TMP_DIR
+            ;;
+    esac
+
+    #############
+    #  Generic  #
+    # ###########
 
     # multimacd needs rt scheduling to work
     info "Setup Kernel Scheduler"
@@ -287,9 +478,6 @@ _module_install()
     fi
     sed -i ${LXC_ROOT_FS}/usr/local/etc/config/multimacd.conf -e "s/bcm2835-raw-uart/mxs_auart_raw.0/g"
 
-    progress "Blocking new kernel updates, please do not use rpi-update anymore, or run this module after kernel update again"
-    echo raspberrypi-kernel hold | dpkg --set-selections
-
     progress "Changing lxc config"
     sed -i $LXC_ROOT/config -e "s/lxc.cgroup.devices.allow = c 245:1 rwm/lxc.cgroup.devices.allow = c 241:* rwm/"
     sed -i $LXC_ROOT/config -e "s/lxc.cgroup.devices.allow = c 242:0 rwm/lxc.cgroup.devices.allow = c 242:* rwm/"
@@ -329,7 +517,6 @@ _module_install()
 
 _module_remove()
 {
-
     # Raspberry 2 oder 3 ?
     if [ "$BOARD_TYPE" = "Raspberry Pi" ] && [ "$BOARD_VERSION" = "3" ]
     then
@@ -351,14 +538,38 @@ _module_remove()
         fi
     fi
 
-    info "Disable pivccu overlay dts"
-    if [ $(cat /boot/config.txt | grep "pivccu-bcm2835" | wc -l ) -gt 1 ]
+    if [ $running_os = "raspbian" ]
     then
-        reboot=$((reboot+1))
-        progress "Changing /boot/config.txt"
-        sed -i /boot/config.txt -e '/dtoverlay=pivccu-bcm2835/d'
-        rm -rf /boot/overlay/pivccu-*
-        info "pivccu modifications in /boot/config.txt removed"
+        info "Disable pivccu overlay dts"
+        if [ $(cat /boot/config.txt | grep "pivccu-bcm2835" | wc -l ) -gt 1 ]
+        then
+            reboot=$((reboot+1))
+            progress "Changing /boot/config.txt"
+            sed -i /boot/config.txt -e '/dtoverlay=pivccu-bcm2835/d'
+            rm -rf /boot/overlay/pivccu-*
+            info "pivccu modifications in /boot/config.txt removed"
+        fi
+
+        # enable serial
+        info "Enable serial..."
+        if grep -q "console=ttyAMA0" $file_cmdline_txt;then
+            if [ -e /proc/device-tree/aliases/serial0 ]; then
+                sed -i $file_cmdline_txt -e "s/console=ttyAMA0/console=serial0/"
+                reboot=$((reboot+1))
+            fi
+            progress "Enable serial is done."
+        elif ! grep -q "console=ttyAMA0" $file_cmdline_txt && ! grep -q "console=serial0" $file_cmdline_txt; then
+            if [ -e /proc/device-tree/aliases/serial0 ]; then
+                sed -i $file_cmdline_txt -e "s/root=/console=serial0,115200 root=/"
+            else
+                sed -i $file_cmdline_txt -e "s/root=/console=ttyAMA0,115200 root=/"
+            fi
+            reboot=$((reboot+1))
+            progress "Enable serial is done."
+        fi
+
+        # Kernel updates zulassen
+        echo raspberrypi-kernel install | dpkg --set-selections
     fi
 
     info "Uninstall modification in rfd.conf..."
@@ -409,27 +620,6 @@ _module_remove()
     then
         sed -i '/lxc.hook.start/s/^/#/g' $LXC_ROOT/config $LXC_ROOT/config
     fi
-
-    # enable serial
-    info "Enable serial..."
-    if grep -q "console=ttyAMA0" $file_cmdline_txt;then
-        if [ -e /proc/device-tree/aliases/serial0 ]; then
-            sed -i $file_cmdline_txt -e "s/console=ttyAMA0/console=serial0/"
-            reboot=$((reboot+1))
-        fi
-        progress "Enable serial is done."
-    elif ! grep -q "console=ttyAMA0" $file_cmdline_txt && ! grep -q "console=serial0" $file_cmdline_txt; then
-        if [ -e /proc/device-tree/aliases/serial0 ]; then
-            sed -i $file_cmdline_txt -e "s/root=/console=serial0,115200 root=/"
-        else
-            sed -i $file_cmdline_txt -e "s/root=/console=ttyAMA0,115200 root=/"
-        fi
-        reboot=$((reboot+1))
-        progress "Enable serial is done."
-    fi
-
-    # Kernel updates zulassen
-    echo raspberrypi-kernel install | dpkg --set-selections
 
     # Reboot
     if [ $reboot -gt 0 ]

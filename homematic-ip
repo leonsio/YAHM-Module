@@ -161,9 +161,9 @@ _module_install()
 
         progress "Found kernel $(uname -r) downloading sources..."
         # aktuelle Kernel Headers runterladen
-        chmod +x /opt/YAHM/share/tools/rpi-source/rpi-source
-        /opt/YAHM/share/tools/rpi-source/rpi-source --nomake  -d /usr/src/
-        chmod 644 /opt/YAHM/share/tools/rpi-source/rpi-source
+        chmod +x ${YAHM_DIR}/share/tools/rpi-source/rpi-source
+        ${YAHM_DIR}/share/tools/rpi-source/rpi-source --nomake  -d /usr/src/
+        chmod 644 ${YAHM_DIR}/share/tools/rpi-source/rpi-source
 
         progress "Preparing raspberry kernel configuration"
         # enter src folder
@@ -214,7 +214,7 @@ _module_install()
 
         progress "Building eq3_loop kernel module"
         # Loop bauen
-        cd "${YAHM_DIR}/share/tools/kernel-modules/eq3_char_loop"
+        cd "${YAHM_DIR}/share/modules/share/kernel-modules/eq3_char_loop"
         make
         if [ $? -ne 0 ]
         then
@@ -224,7 +224,7 @@ _module_install()
 
         progress "Building plat_eq3ccu2 kernel module"
         # Loop bauen
-        cd "${YAHM_DIR}/share/tools/kernel-modules/plat_eq3ccu2"
+        cd "${YAHM_DIR}/share/modules/share/kernel-modules/plat_eq3ccu2"
         make
         if [ $? -ne 0 ]
         then
@@ -236,13 +236,13 @@ _module_install()
         # fix falls bmc2709 Daten nicht vorhanden sind
         if [ ! -d /usr/src/linux/arch/arm/mach-bcm2709 ]
         then
-            cp -rf "${YAHM_DIR}/share/tools/mach-bcm2709" /usr/src/linux/arch/arm
+            cp -rf "${YAHM_DIR}/share/modules/share/mach-bcm2709" /usr/src/linux/arch/arm
             #info "Downloading needed files form repository"
             #cd /usr/src/linux/arch/arm
             #svn export https://github.com/raspberrypi/linux/branches/rpi-4.7.y/arch/arm/mach-bcm2709
         fi
         # UART bauen
-        cd "${YAHM_DIR}/share/tools/kernel-modules/bcm2835_raw_uart"
+        cd "${YAHM_DIR}/share/modules/share/kernel-modules/bcm2835_raw_uart"
         make
         if [ $? -ne 0 ]
         then
