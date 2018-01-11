@@ -3,7 +3,7 @@
 # CuxD
 # 
 
-description="CuxD 1.11 for Yahm"
+description="CuxD Installer for YAHM"
 
 _module_install()
 {
@@ -14,9 +14,11 @@ _module_install()
   progress "Download ..."
   tmpdest="${YAHM_TMP}/cuxd.tar.gz"
   mkdir -p $YAHM_TMP
-    
-  cuxdurl="https://homematic-forum.de/forum/download/file.php?id=42004"
-  wget -q --tries=3 --retry-connrefused  -O $tmpdest $cuxdurl
+
+  CUXD_VERSION=$(wget $QUIET -O-  -T 3 -t 1 https://raw.githubusercontent.com/jens-maus/cuxd/master/VERSION)
+  CUXD_URL="https://github.com/jens-maus/cuxd/releases/download/${CUXD_VERSION}/cuxd_${CUXD_VERSION}_ccu2.tar.gz"
+
+  wget $QUIET --tries=3 --retry-connrefused  -O $tmpdest $CUXD_URL
     if [ ! -f "$tmpdest" ] 
     then
         die "ERROR: Can not download cuxd. Are you connected to the internet?"
