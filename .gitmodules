@@ -1,0 +1,3 @@
+[submodule "share/piVCCU"]
+	path = share/piVCCU
+	url = https://github.com/leonsio/piVCCU.git

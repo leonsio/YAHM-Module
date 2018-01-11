@@ -3,7 +3,7 @@
 # Homematic IP
 #
 
-description="Homematic IP Unterstützung (deprecated)"
+description="Homematic IP Support for Raspberry Pi (deprecated, use pivccu-driver)"
 module_version="0.4"
 
 set +e
