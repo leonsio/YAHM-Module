@@ -300,7 +300,7 @@ _module_install()
                     OVERLAY_FILE='pivccu-sun8i-h3.dtbo'
                     break
                     ;;
-                brcm,bcm2837brcm,bcm2836|brcm,bcm2836)
+                brcm,bcm2837|brcm,bcm2836)
                     OVERLAY_MODE='overlay'
                     OVERLAY_FILE='pivccu-bcm2835.dtbo'
                     break
@@ -334,7 +334,7 @@ _module_install()
                 die "piVCCU: Error! Current FDT could not be determined"
             fi
 
-            if [ -z "$INCLUDE_FILE" ]
+            if [ ! -f "$INCLUDE_FILE" ]
             then
                 die "piVCCU: Error! Hardware platform is not supported"
             fi
