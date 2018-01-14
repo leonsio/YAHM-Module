@@ -1,0 +1,172 @@
+#!/bin/bash
+#
+# Homematic IP
+#
+
+description="Deactivate Homematic IP Support (install old hmserver.jar)"
+module_version="0.1"
+
+set +e
+
+_module_install()
+{
+    check_install_deb "xmlstarlet"
+
+    progress "Removing HmIP-RF Interface"
+    if [ ! -f "${LXC_ROOT_FS}/usr/local/etc/config/InterfacesList.xml" ]
+    then
+        die "InterfacesList.xml can not be found, please start ${LXCNAME} first"
+    fi
+
+    info "Stopping Homematic IP Server"
+    lxc-attach -n ${LXCNAME} -- /etc/init.d/S62HMServer stop
+
+    info "Removing HmIP-RF from InterfacesLixt.xml"
+    cd ${LXC_ROOT_FS}/usr/local/etc/config/
+    if [ $( cat InterfacesList.xml | grep HmIP-RF | wc -l ) -gt 0 ]
+    then
+        xmlstarlet ed -d "/interfaces/ipc[name='HmIP-RF']" InterfacesList.xml > InterfacesList.xml.new
+        mv InterfacesList.xml InterfacesList.xml.bak
+        mv InterfacesList.xml.new InterfacesList.xml
+    fi
+
+    cd ${LXC_ROOT_FS}/etc/config_templates/
+    if [ $( cat InterfacesList.xml | grep HmIP-RF | wc -l ) -gt 0 ]
+    then
+        xmlstarlet ed -d "/interfaces/ipc[name='HmIP-RF']" InterfacesList.xml > InterfacesList.xml.new
+        mv InterfacesList.xml InterfacesList.xml.bak
+        mv InterfacesList.xml.new InterfacesList.xml
+    fi
+
+    installed_version=`get_yahm_version ${LXCNAME}`
+
+    if [ $(ver ${installed_version}) -ge $(ver 2.15.6) ]
+    then
+   	    progress "Downloading jre-7u10"
+        curl -sS -o /tmp/ejre-7u10.tgz $VERBOSE -O -L -b oraclelicense=accept-securebackup-cookie http://download.oracle.com/otn-pub/java/ejre/7u10-b18/ejre-7u10-fcs-b18-linux-arm-vfp-client_headless-28_nov_2012.tar.gz
+	    progress "Extracting jre-7u10"
+	    tar $VERBOSE -xzf /tmp/ejre-7u10.tgz -C ${LXC_ROOT_FS}/opt/
+	    progress "Downloading old HMServer.jar"
+        curl -sS -o ${LXC_ROOT_FS}/opt/HMServer/HMServer.jar -O -L https://github.com/eq-3/occu/raw/ff030ca119f2597d16a90b01b61dddb2147b6841/HMserver/opt/HMServer/HMServer.jar
+
+        #Backup old startup file
+        if [ -f ${LXC_ROOT_FS}/etc/init.d/S62HMServer ]
+        then
+            mv ${LXC_ROOT_FS}/etc/init.d/S62HMServer ${LXC_ROOT_FS}/etc/init.d/_S62HMServer
+        fi
+
+        #Create new startup file
+        if [ ! -f ${LXC_ROOT_FS}/etc/init.d/S61HMServer ]
+        then
+            cat > "${LXC_ROOT_FS}/etc/init.d/S61HMServer" <<EOF
+#!/bin/sh
+#
+# Starts HMServer.
+#
+
+LOGLEVEL_HMServer=5
+CFG_TEMPLATE_DIR=/etc/config_templates
+
+init() {
+    export TZ=\`cat /etc/config/TZ | cut -d'-' -f1 | cut -d'+' -f1\`
+    export JAVA_HOME=/opt/ejre1.7.0_10/
+    export PATH=\$PATH:\$JAVA_HOME/bin
+    if [ ! -e /etc/config/log4j.xml ] ; then
+        cp \$CFG_TEMPLATE_DIR/log4j.xml /etc/config
+    fi
+}
+
+start() {
+    echo -n "Starting HMServer: "
+    init
+    start-stop-daemon -S -q -p /var/run/HMServer.pid --exec java -- -Xmx32m -Dlog4j.configuration=file:///etc/config/log4j.xml -Dfile.encoding=ISO-8859-1 -jar /opt/HMServer/HMServer.jar &
+    eq3configcmd wait-for-file -f /var/status/HMServerStarted -p 5 -t 135
+    echo	 "OK"
+}
+stop() {
+    echo -n "Stopping HMServer: "
+    start-stop-daemon -K -q -p /var/run/HMServer.pid
+    echo "OK"
+}
+restart() {
+    stop
+    start
+}
+
+case "\$1" in
+  start)
+    start
+    ;;
+  stop)
+    stop
+    ;;
+  restart|reload)
+    restart
+    ;;
+  *)
+    echo "Usage: \$0 {start|stop|restart}"
+    exit 1
+esac
+
+exit \$?
+EOF
+            chmod +x ${LXC_ROOT_FS}/etc/init.d/S61HMServer
+        fi
+    fi
+
+    info "Restarting services"
+    lxc-attach -n ${LXCNAME} -- /etc/init.d/S61rfd restart
+    lxc-attach -n ${LXCNAME} -- /etc/init.d/S61HMServer start
+    lxc-attach -n ${LXCNAME} -- /etc/init.d/S70ReGaHss restart
+
+    info "Homematic-IP interface was successfully disabled"
+
+}
+
+_module_remove()
+{
+
+
+    installed_version=`get_yahm_version ${LXCNAME}`
+
+    if [ $(ver ${installed_version}) -lt $(ver 2.15.6) ]
+    then
+        die "Homematic IP is not supported by your CCU2-FW"
+    fi
+
+    info "Stopping HMServer"
+    lxc-attach -n ${LXCNAME} -- /etc/init.d/S61HMServer stop
+
+    info "Restoring InterfacesList.xml"
+    cd ${LXC_ROOT_FS}/usr/local/etc/config/
+    if [ $(cat InterfacesList.xml | grep HmIP-RF | wc -l ) -eq 0 ]
+    then
+        sed -i InterfacesList.xml -e "s/<\/interfaces>/\t<ipc>\n\t\t<name>HmIP-RF<\/name>\n\t\t<url>xmlrpc:\/\/127.0.0.1:2010<\/url>\n\t\t<info>HmIP-RF<\/info>\n\t<\/ipc>\n<\/interfaces>/"
+    fi
+    cd ${LXC_ROOT_FS}/etc/config_templates/
+    if [ $( cat InterfacesList.xml | grep HmIP-RF | wc -l ) -eq 0 ]
+    then
+        sed -i InterfacesList.xml -e "s/<\/interfaces>/\t<ipc>\n\t\t<name>HmIP-RF<\/name>\n\t\t<url>xmlrpc:\/\/127.0.0.1:2010<\/url>\n\t\t<info>HmIP-RF<\/info>\n\t<\/ipc>\n<\/interfaces>/"
+    fi
+
+    info "Restoring HMIPServer"
+    if [ -f ${LXC_ROOT_FS}/etc/init.d/S61HMServer ]
+    then
+        rm -rf ${LXC_ROOT_FS}/etc/init.d/S61HMServer
+    fi
+
+    if [ -f ${LXC_ROOT_FS}/etc/init.d/_S62HMServer ]
+    then
+        mv ${LXC_ROOT_FS}/etc/init.d/_S62HMServer ${LXC_ROOT_FS}/etc/init.d/S62HMServer
+    else
+        die "Someting is wrong, can not find S62HMServer file"
+    fi
+
+    info "Restarting services"
+    lxc-attach -n ${LXCNAME} -- /etc/init.d/S61rfd restart
+    lxc-attach -n ${LXCNAME} -- /etc/init.d/S62HMServer start
+    lxc-attach -n ${LXCNAME} -- /etc/init.d/S70ReGaHss restart
+
+    info "Homematic-IP interface was successfully enabled"
+
+}

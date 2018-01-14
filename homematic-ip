@@ -467,124 +467,11 @@ EOF
 
 _module_remove()
 {
-    check_install_deb "xmlstarlet"
-
-    progress "Removing HmIP-RF Interface"
-    if [ ! -f "${LXC_ROOT_FS}/usr/local/etc/config/InterfacesList.xml" ]
-    then
-        die "InterfacesList.xml can not be found, please start ${LXCNAME} first"
-    fi
-
-    cd ${LXC_ROOT_FS}/usr/local/etc/config/
-    xmlstarlet ed -d "/interfaces/ipc[name='HmIP-RF']" InterfacesList.xml > InterfacesList.xml.new
-    mv InterfacesList.xml InterfacesList.xml.bak
-    mv InterfacesList.xml.new InterfacesList.xml
-
-    cd ${LXC_ROOT_FS}/etc/config_templates/
-    xmlstarlet ed -d "/interfaces/ipc[name='HmIP-RF']" InterfacesList.xml > InterfacesList.xml.new
-    mv InterfacesList.xml InterfacesList.xml.bak
-    mv InterfacesList.xml.new InterfacesList.xml
-
-    installed_version=`get_yahm_version ${LXCNAME}`
-
-    if [ $(ver ${installed_version}) -ge $(ver 2.15.6) ]
-    then
-   	progress "Downloading jre-7u10"
-        curl -sS -o /tmp/ejre-7u10.tgz $VERBOSE -O -L -b oraclelicense=accept-securebackup-cookie http://download.oracle.com/otn-pub/java/ejre/7u10-b18/ejre-7u10-fcs-b18-linux-arm-vfp-client_headless-28_nov_2012.tar.gz
-	progress "Extracting jre-7u10"
-	tar $VERBOSE -xzf /tmp/ejre-7u10.tgz -C ${LXC_ROOT_FS}/opt/
-	progress "Downloading old HMServer.jar"
-        curl -sS -o ${LXC_ROOT_FS}/opt/HMServer/HMServer.jar -O -L https://github.com/eq-3/occu/raw/ff030ca119f2597d16a90b01b61dddb2147b6841/HMserver/opt/HMServer/HMServer.jar
-        #progress "Restoring old HMServer.jar file"
-        #wget $QUIET -O ${LXC_ROOT_FS}/opt/HMServer/HMServer.jar https://raw.githubusercontent.com/eq-3/occu/master/HMserver/opt/HMServer/HMServer.jar
-        #Backup old startup file
-        mv ${LXC_ROOT_FS}/etc/init.d/S62HMServer ${LXC_ROOT_FS}/etc/init.d/_S62HMServer
-        #Create new startup file
-        cat > "${LXC_ROOT_FS}/etc/init.d/S61HMServer" <<EOF
-#!/bin/sh
-#
-# Starts HMServer.
-#
-
-LOGLEVEL_HMServer=5
-CFG_TEMPLATE_DIR=/etc/config_templates
-
-init() {
-    export TZ=\`cat /etc/config/TZ | cut -d'-' -f1 | cut -d'+' -f1\`
-    export JAVA_HOME=/opt/ejre1.7.0_10/
-    export PATH=\$PATH:\$JAVA_HOME/bin
-    if [ ! -e /etc/config/log4j.xml ] ; then
-        cp \$CFG_TEMPLATE_DIR/log4j.xml /etc/config
-    fi
-}
-
-start() {
-    echo -n "Starting HMServer: "
-    init
-    start-stop-daemon -S -q -p /var/run/HMServer.pid --exec java -- -Xmx32m -Dlog4j.configuration=file:///etc/config/log4j.xml -Dfile.encoding=ISO-8859-1 -jar /opt/HMServer/HMServer.jar &
-    eq3configcmd wait-for-file -f /var/status/HMServerStarted -p 5 -t 135
-    echo	 "OK"
-}
-stop() {
-    echo -n "Stopping HMServer: "
-    start-stop-daemon -K -q -p /var/run/HMServer.pid
-    echo "OK"
-}
-restart() {
-    stop
-    start
-}
-
-case "\$1" in
-  start)
-    start
-    ;;
-  stop)
-    stop
-    ;;
-  restart|reload)
-    restart
-    ;;
-  *)
-    echo "Usage: \$0 {start|stop|restart}"
-    exit 1
-esac
-
-exit \$?
-EOF
-        chmod +x ${LXC_ROOT_FS}/etc/init.d/S61HMServer
-    fi
-
-    # Bestimmen ob das RAW Device bereits installiert wurde
-    if [ ! -c /dev/bcm2835-raw-uart ]
-    then
-        dev_int="ttyAMA0"
-    else
-        dev_int="bcm2835-raw-uart"
-    fi
+    info "This module remove bcm2835-raw-uart kernel driver and restoring old configuration"
 
     progress "Stopping rfd and multimac services, to detect module firmware"
     lxc-attach -n ${LXCNAME}  -- /etc/init.d/S60multimacd stop
     lxc-attach -n ${LXCNAME}  -- /etc/init.d/S61rfd stop
-
-    # Firmware check
-    firmware_version=`lxc-attach -n ${LXCNAME} -- /bin/eq3configcmd update-coprocessor -p /dev/${dev_int} -c -v 3>&1 1>&2 2>&3  | grep -Po 'Version: \K[^"]*'`
-
-    info "Downgrade firmware if needed"
-
-    if [ $(ver ${firmware_version}) -gt $(ver 2.0.0) ]
-    then
-        progress "Downloading actual firmware from repository"
-        cd $LXC_ROOT_FS/firmware
-        svn export https://github.com/eq-3/occu/trunk/firmware/HM-MOD-UART
-        # set right firmware version
-        cd HM-MOD-UART
-
-        progress "Flashing firmware"
-        lxc-attach -n ${LXCNAME} --  eq3configcmd update-coprocessor -p /dev/${dev_int} -t HM-MOD-UART -u -f -c -d /firmware/HM-MOD-UART
-    else
-        info "Firmware already downgraded"
-    fi
 
     if [ -c ${LXC_ROOT_FS}/dev/mmd_bidcos ]
     then
@@ -623,5 +510,5 @@ EOF
     rm  /lib/modules/$(uname -r)/kernel/drivers/char/broadcom/bcm2835_raw_uart.ko
     depmod -a
 
-    info "Homematic-IP interface was removed, please restart CCU2-LXC Container"
+    info "Homematic-IP kernel module was removed, please restart CCU2-LXC Container"
 }
