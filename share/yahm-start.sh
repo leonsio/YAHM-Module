@@ -1,5 +1,10 @@
 #!/bin/sh
 
+if [ -d "/sys/module/plat_eq3ccu2" ]
+then
+
+fi
+
 EQ3LOOP_MAJOR=`cat /sys/module/plat_eq3ccu2/parameters/eq3charloop_major`
 UART_MAJOR=`cat /sys/module/plat_eq3ccu2/parameters/uart_major`
 

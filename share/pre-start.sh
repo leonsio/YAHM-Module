@@ -3,6 +3,13 @@
 #LXC_ROOTFS_PATH=/var/lib/lxc/yahm/root
 #LXC_NAME=yahm
 
+if [ ! -d "/sys/module/plat_eq3ccu2" ]
+then
+    logger -p kern.error "pivccu driver is not loaded"
+    echo "pivccu driver is not loaded" >> /var/log/yahm/yahm_consolle.log
+    exit
+fi
+
 if [ -f /var/lib/lxc/${LXC_NAME}/.modules/pivccu-driver ] 
 then
 	YAHM_KERNEL="pivccu"

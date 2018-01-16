@@ -46,6 +46,8 @@ _module_install()
 {
 
     WORK_DIR=$(mktemp -d)
+    deb_kernel=0
+    dkms_mode=0
     # Aktuelle Kernel Version
     kernel_version=$(uname -r | sed -e 's/-.*//i')
 
@@ -174,6 +176,18 @@ _module_install()
                 deb_kernel=1
             fi
 
+            # Original kernel is installed and running
+            if [ $deb_kernel -eq 1 ]
+            then
+                # enable dkms support for future kernel updates
+                if [ $(ver ${kernel_version}) -eq $(ver ${deb_version}) ]
+                then
+                    dkms_mode=1
+                    progress "Raspbian kernel found, downloading kernel headers"
+                    install_package "raspberrypi-kernel-headers"
+                fi
+            fi
+
             # Prüfung der Kernel Version rpi-update weg
             if [ -f /boot/.firmware_revision ]
             then
@@ -210,33 +224,35 @@ _module_install()
                 die "Something is wrong, loaded kernel ${kernel_version} is newer then last rpi-update (${rpi_version}) or dpkg (${deb_version}) installed versions, own/custom kernel buils are not supported"
             fi
 
-
             # Abhängigkeiten installieren
             progress "Installing dependencies"
             apt-get ${APT_OUTPUT} -y install bc gcc-4.9 make libncurses5-dev
 
-            info "Set right gcc version"
-            ln -sf /usr/bin/gcc-4.9 /usr/bin/gcc
-
-            progress "Found kernel $(uname -r) downloading sources from git und prepare kernel modules (5-10 min) "
-            # aktuelle Kernel Headers runterladen
-            chmod +x ${YAHM_DIR}/share/tools/rpi-source/rpi-source
-            ${YAHM_DIR}/share/tools/rpi-source/rpi-source -d /usr/src/
-            chmod 644 ${YAHM_DIR}/share/tools/rpi-source/rpi-source
-
-            if [ ! -d /lib/modules/$(uname -r)/kernel/drivers ]
+            if [ $dkms_mode -eq 0 ]
             then
-                die "Something is wrong, can not find build directory"
-            fi
+                info "kernel was updated with rpi-update!!!"
+                info "Set right gcc version"
+                ln -sf /usr/bin/gcc-4.9 /usr/bin/gcc
 
-            progress "Blocking new kernel updates, please do not use rpi-update anymore, or run this module after kernel update again"
-            echo raspberrypi-kernel hold | dpkg --set-selections
+                progress "Found kernel $(uname -r) downloading sources from git und prepare kernel modules (5-10 min) "
+                # aktuelle Kernel Headers runterladen
+                chmod +x ${YAHM_DIR}/share/tools/rpi-source/rpi-source
+                ${YAHM_DIR}/share/tools/rpi-source/rpi-source -d /usr/src/ &>>/dev/null
+                chmod 644 ${YAHM_DIR}/share/tools/rpi-source/rpi-source
+
+                if [ ! -d /lib/modules/$(uname -r)/kernel/drivers ]
+                then
+                    die "Something is wrong, can not find build directory"
+                fi
+
+                progress "Please do not use rpi-update anymore, or run this module installation after kernel update again"
+            fi
         fi
 
         # Armbian with apt-get
         if [ $running_os = "armbian" ]
         then
-
+            dkms_mode=1
             source /etc/armbian-release
             TARGET_BRANCH=$BRANCH
             TARGET_FAMILY=$LINUXFAMILY
@@ -258,30 +274,77 @@ _module_install()
         ###########################
         # Building kernel modules #
         ###########################
-
-        info "Installing kernel modules"
-
-        cd $WORK_DIR
-        # Download generic uart sources
-        cp -rf ${YAHM_DIR}/share/modules/share/piVCCU/* .
-        cd kernel
-        cp ${YAHM_DIR}/share/modules/share/kernel-modules/eq3_char_loop/*.c .
-
-        # building
-        progress "Building eq3 kernel modules"
-        make
-        if [ $? -ne 0 ]
+        if [ $dkms_mode -eq 0 ]
         then
-            die "ERROR: Problem while building eq3 module, exit"
+            info "Installing kernel modules (without dkms support)"
+            info "You must run this module installation, after new kernel update"
+
+            cd $WORK_DIR
+            # Download generic uart sources
+            cp -rf ${YAHM_DIR}/share/modules/share/piVCCU/* .
+            cd kernel
+            cp ${YAHM_DIR}/share/modules/share/kernel-modules/eq3_char_loop/*.c .
+
+            # building
+            progress "Building eq3 kernel modules"
+            make
+            if [ $? -ne 0 ]
+            then
+                die "ERROR: Problem while building eq3 module, exit"
+            fi
+
+            # copy binaries
+            mkdir -p /lib/modules/$(uname -r)/kernel/drivers/pivccu
+            cp *.ko /lib/modules/$(uname -r)/kernel/drivers/pivccu
+
+            # regenerate modules list
+            progress "Regenerating modules.dep and map files"
+            depmod -a
+        else
+            # Installing dkms
+            install_package "dkms"
+
+            progress "Preparing kernel modules"
+            # copy all kernel files
+            cp -rf ${YAHM_DIR}/share/modules/share/piVCCU/kernel /usr/src/yahm_pivccu-0.0.1
+            cp ${YAHM_DIR}/share/modules/share/kernel-modules/eq3_char_loop/*.c /usr/src/yahm_pivccu-0.0.1
+            cat > /usr/src/yahm_pivccu-0.0.1/dkms.conf <<EOF
+PACKAGE_NAME="yahm_pivccu"
+PACKAGE_VERSION=0.0.1
+
+MAKE="'make' all"
+CLEAN="'make' clean"
+AUTOINSTALL="yes"
+
+BUILT_MODULE_NAME[0]="dw_apb_raw_uart"
+DEST_MODULE_LOCATION[0]="/kernel/drivers/pivccu"
+BUILT_MODULE_NAME[1]="eq3_char_loop"
+DEST_MODULE_LOCATION[1]="/kernel/drivers/pivccu"
+BUILT_MODULE_NAME[2]="generic_raw_uart"
+DEST_MODULE_LOCATION[2]="/kernel/drivers/pivccu"
+BUILT_MODULE_NAME[3]="pl011_raw_uart"
+DEST_MODULE_LOCATION[3]="/kernel/drivers/pivccu"
+BUILT_MODULE_NAME[4]="plat_eq3ccu2"
+DEST_MODULE_LOCATION[4]="/kernel/drivers/pivccu"
+EOF
+            info "Setup dkms service"
+            dkms add -m yahm_pivccu -v 0.0.1 &>> /dev/null
+            if [ $? -ne 0 ]
+            then
+                die "ERROR: Problem creating dkms service (dkms add -m yahm_pivccu -v 0.0.1)"
+            fi
+            progress "Building kernel modules"
+            dkms build -m yahm_pivccu -v 0.0.1
+
+            progress "Installing kernel modules"
+            dkms install -m yahm_pivccu -v 0.0.1
+
+            if [ $running_os = "raspbian" ]
+            then
+                info "ATTENTION: If you use rpi-update you must run this module installation after installing new kernel"
+            fi
+
         fi
-
-        # copy binaries
-        mkdir -p /lib/modules/$(uname -r)/kernel/drivers/pivccu
-        cp *.ko /lib/modules/$(uname -r)/kernel/drivers/pivccu
-
-        # regenerate modules list
-        progress "Regenerating modules.dep and map files"
-        depmod -a
     fi
 
     #################################################
@@ -567,9 +630,6 @@ _module_remove()
             reboot=$((reboot+1))
             progress "Enable serial is done."
         fi
-
-        # Kernel updates zulassen
-        echo raspberrypi-kernel install | dpkg --set-selections
     fi
 
     info "Uninstall modification in rfd.conf..."
@@ -585,6 +645,9 @@ _module_remove()
 
         progress "Uninstall modification in rfd.conf is done."
     fi
+
+    progress "Removing dkms service, if installed"
+    dkms remove -m yahm_pivccu -v 0.0.1 --all &>>/dev/null
 
     if [ -d /lib/modules/$(uname -r)/kernel/drivers/pivccu ]
     then
